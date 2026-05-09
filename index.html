@@ -1721,6 +1721,44 @@
 
   /* ══ End pay-period budget v2 ════════════════════════════ */
 
+  /* Backup section */
+  .backup-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 14px;
+  }
+
+  .backup-note {
+    padding: 12px 14px;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--line-soft);
+    border-radius: 10px;
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    line-height: 1.55;
+  }
+
+  .backup-note strong {
+    color: var(--apple-cyan);
+    font-weight: 600;
+  }
+
+  .backup-status {
+    margin-top: 12px;
+    padding: 0 2px;
+    font-size: 12px;
+    line-height: 1.5;
+    min-height: 18px;
+    letter-spacing: 0.01em;
+  }
+
+  .backup-status.success { color: var(--apple-green); }
+  .backup-status.error   { color: var(--apple-red); }
+  .backup-status.info    { color: var(--ink-soft); }
+
+  .backup-status:empty { display: none; }
+
   .section-head {
     display: flex;
     justify-content: space-between;
@@ -3234,6 +3272,26 @@
         <div class="preset-name">Weekend mode</div>
         <div class="preset-times">8:00 wake · no work · 11:30 lights out</div>
       </button>
+    </div>
+
+    <!-- Backup: export / import -->
+    <div class="glass section">
+      <div class="section-head">
+        <div class="section-eyebrow">Backup</div>
+        <div class="section-hint">Export everything to a file · re-import to restore</div>
+      </div>
+
+      <div class="backup-actions">
+        <button class="btn" id="backupExportBtn">Export all data</button>
+        <button class="btn" id="backupImportBtn">Import from file</button>
+        <input type="file" id="backupFileInput" accept=".json,application/json" style="display:none">
+      </div>
+
+      <div class="backup-note">
+        <strong>What this is for.</strong> The file contains your complete Loop state — bills, spending, savings, schedule, daily progress. Save it to email or a note app every few weeks as a backup. To restore on a new phone, install the app first, then import the file here.
+      </div>
+
+      <div class="backup-status" id="backupStatus"></div>
     </div>
 
     <!-- Reset to defaults -->
@@ -4778,6 +4836,183 @@
       renderSettings();
       renderAll();
     }
+  });
+
+  // ───────────────────────────────────────────
+  // BACKUP: export / import all Loop data
+  // ───────────────────────────────────────────
+
+  // Collect every loop:* localStorage key into a single payload object.
+  // Using a prefix scan rather than a hard-coded list of keys means future
+  // keys (per-day state, additional features) get included automatically.
+  function collectAllLoopData() {
+    const data = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith('loop:')) {
+        data[key] = localStorage.getItem(key);
+      }
+    }
+    return data;
+  }
+
+  function setBackupStatus(text, kind) {
+    const el = document.getElementById('backupStatus');
+    el.textContent = text;
+    el.className = 'backup-status' + (kind ? ' ' + kind : '');
+    // Auto-clear success and info messages after a moment so the section
+    // doesn't accumulate stale text.
+    if (kind === 'success' || kind === 'info') {
+      setTimeout(() => {
+        if (el.textContent === text) {
+          el.textContent = '';
+          el.className = 'backup-status';
+        }
+      }, 6000);
+    }
+  }
+
+  // Export: build a JSON file and trigger a download
+  document.getElementById('backupExportBtn').addEventListener('click', () => {
+    try {
+      const payload = {
+        app: 'loop',
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        data: collectAllLoopData(),
+      };
+      const text = JSON.stringify(payload, null, 2);
+      const blob = new Blob([text], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      // Use a temp anchor to trigger the download on iOS, which doesn't
+      // support a programmatic Save dialog directly. iOS Safari treats
+      // .json downloads inconsistently, so also offer Web Share as a fallback.
+      const filename = `loop-backup-${new Date().toISOString().slice(0, 10)}.json`;
+
+      // Prefer Web Share if available — it lets the user save to Files,
+      // mail it to themselves, AirDrop it, etc. Cleaner UX on iOS.
+      if (navigator.share && navigator.canShare) {
+        const file = new File([blob], filename, { type: 'application/json' });
+        if (navigator.canShare({ files: [file] })) {
+          navigator.share({
+            files: [file],
+            title: 'Loop backup',
+            text: 'Loop app data backup',
+          }).then(() => {
+            setBackupStatus(`Backup ready · ${filename}`, 'success');
+          }).catch(err => {
+            // User cancelled — that's fine, no error
+            if (err.name !== 'AbortError') {
+              fallbackDownload(url, filename);
+            }
+          });
+          return;
+        }
+      }
+      fallbackDownload(url, filename);
+    } catch (e) {
+      setBackupStatus(`Export failed: ${e.message}`, 'error');
+    }
+  });
+
+  function fallbackDownload(url, filename) {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setBackupStatus(`Downloaded ${filename}`, 'success');
+  }
+
+  // Import: trigger the hidden file picker
+  document.getElementById('backupImportBtn').addEventListener('click', () => {
+    document.getElementById('backupFileInput').click();
+  });
+
+  // Handle file selection
+  document.getElementById('backupFileInput').addEventListener('change', e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = ev => {
+      try {
+        const text = ev.target.result;
+        const parsed = JSON.parse(text);
+
+        // Validate shape
+        if (!parsed || parsed.app !== 'loop' || !parsed.data || typeof parsed.data !== 'object') {
+          setBackupStatus('That file doesn\'t look like a Loop backup.', 'error');
+          e.target.value = ''; // reset for re-pick
+          return;
+        }
+
+        // Build a preview for the confirm dialog
+        const keys = Object.keys(parsed.data);
+        const exportDate = parsed.exportedAt
+          ? new Date(parsed.exportedAt).toLocaleDateString()
+          : 'unknown date';
+
+        // Pull a few summary stats for the preview
+        let billsCount = 0, spendingCount = 0, savingsCount = 0;
+        if (parsed.data['loop:budget']) {
+          try {
+            const b = JSON.parse(parsed.data['loop:budget']);
+            billsCount    = (b.bills    || []).length;
+            spendingCount = (b.spending || []).length;
+            savingsCount  = (b.savings  || []).length;
+          } catch (e) {}
+        }
+
+        const preview =
+          `Import Loop backup from ${exportDate}?\n\n` +
+          `• ${keys.length} storage entries\n` +
+          `• ${billsCount} bills\n` +
+          `• ${spendingCount} spending categories\n` +
+          `• ${savingsCount} savings goals\n\n` +
+          `This will REPLACE your current data. ` +
+          `If you want to keep your current data, cancel and Export it first.`;
+
+        if (!confirm(preview)) {
+          setBackupStatus('Import cancelled.', 'info');
+          e.target.value = '';
+          return;
+        }
+
+        // Replace: clear all loop:* keys, then write the imported ones
+        const existingKeys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith('loop:')) existingKeys.push(k);
+        }
+        existingKeys.forEach(k => localStorage.removeItem(k));
+
+        Object.entries(parsed.data).forEach(([k, v]) => {
+          if (k.startsWith('loop:') && typeof v === 'string') {
+            localStorage.setItem(k, v);
+          }
+        });
+
+        setBackupStatus(`Imported ${keys.length} entries. Reloading...`, 'success');
+        e.target.value = '';
+
+        // Reload to re-bootstrap all in-memory state from the new storage.
+        // Direct re-render isn't enough — many module-level vars (budget,
+        // settings, state) were already loaded with the old data.
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        setBackupStatus(`Import failed: ${err.message}`, 'error');
+        e.target.value = '';
+      }
+    };
+    reader.onerror = () => {
+      setBackupStatus('Could not read the file.', 'error');
+      e.target.value = '';
+    };
+    reader.readAsText(file);
   });
 
   renderSettings();
