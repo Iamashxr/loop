@@ -1,0 +1,25 @@
+{
+  "name": "Loop",
+  "short_name": "Loop",
+  "description": "A daily loop and pay-period budget — reps build the calm.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1e16",
+  "theme_color": "#0a1e16",
+  "icons": [
+    {
+      "src": "icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
