@@ -3315,12 +3315,12 @@
   // ─── SETTINGS ──────────────────────────────
   // Schedule anchors. Everything else is computed from these.
   const DEFAULT_SETTINGS = {
-    wakeTime: 7.5,      // 7:30 AM
-    workStart: 9.0,     // 9:00 AM
-    workEnd: 17.0,      // 5:00 PM
-    homeTime: 18.0,     // 6:00 PM
-    lightsOut: 23.0,    // 11:00 PM
-    sundayStart: 10.0,  // 10:00 AM
+    wakeTime: 6.5,      // 6:30 AM — middle of stated 6–7 window
+    workStart: 9.0,     // 9:00 AM — start of 9-to-5
+    workEnd: 17.0,      // 5:00 PM — end of 9-to-5
+    homeTime: 17.5,     // 5:30 PM — close to home from work (hybrid; ~30 min buffer for office days)
+    lightsOut: 22.5,    // 10:30 PM — eight hours before 6:30 wake
+    sundayStart: 9.0,   // 9:00 AM — earlier than the old default so Sunday isn't compressed
   };
 
   function loadSettings() {
@@ -3376,80 +3376,90 @@
     const h = settings.homeTime;       // home anchor
     const lo = settings.lightsOut;     // lights-out anchor
 
-    // Morning: 90-minute window from wake to work start
-    // We scale the morning blocks to fit whatever space you have between wake and work
+    // Morning is a 2.5-hour window from wake to work start at default settings.
+    // The morning's spiritual practice is the anchor, not work prep. Quiet time
+    // happens early — while the house is still — and everything else flows
+    // around it.
     const morningSpan = wsStart - w;
-    // Distribute proportionally based on default 1.5h plan:
-    // launch 10min, breakfast 20min, ready 30min, buffer 25min, at-desk 5min = 90 min
+    // Block durations at default 2.5h (150 min):
+    // launch 10, quiet 45, breakfast 20, ready 30, buffer 35, atDesk 10 = 150
     const ratios = {
-      launch: 10 / 90,
-      breakfast: 20 / 90,
-      ready: 30 / 90,
-      buffer: 25 / 90,
-      atDesk: 5 / 90,
+      launch: 10 / 150,
+      quiet: 45 / 150,
+      breakfast: 20 / 150,
+      ready: 30 / 150,
+      buffer: 35 / 150,
+      atDesk: 10 / 150,
     };
-    // Alarm is the first ~5 minutes; the launch sequence begins where the alarm ends
-    // and runs to launchEnd. This prevents two blocks from sharing the same start time
-    // (which would cause findCurrentBlock to mask the launch sequence).
-    // We cap alarmEnd at launchEnd so a degenerate morning span never produces a
-    // negative-duration launch block.
+    // Alarm is the first ~5 minutes; subsequent blocks chain from there.
+    // Cap alarmEnd at launchEnd so a degenerate morning span doesn't create a
+    // negative-duration block.
     const launchEnd = w + morningSpan * ratios.launch;
     const alarmEnd = Math.min(w + 0.083, launchEnd);
-    const breakfastEnd = launchEnd + morningSpan * ratios.breakfast;
+    const quietEnd = launchEnd + morningSpan * ratios.quiet;
+    const breakfastEnd = quietEnd + morningSpan * ratios.breakfast;
     const readyEnd = breakfastEnd + morningSpan * ratios.ready;
     const bufferEnd = readyEnd + morningSpan * ratios.buffer;
 
     const morning = [
-      { start: w, end: alarmEnd, title: 'Alarm', desc: 'Out of bed within five minutes. Phone in the kitchen, not bedside.', keystone: 'wake' },
-      { start: alarmEnd, end: launchEnd, title: 'Launch sequence', desc: 'Bathroom → cold water → light/outside 60 sec → dress. Same order, no decisions.' },
-      { start: launchEnd, end: breakfastEnd, title: 'Breakfast + hydration', desc: 'Real food with protein. With wife if possible. No phone, no work, no news.' },
-      { start: breakfastEnd, end: readyEnd, title: 'Get ready', desc: 'Shower, teeth, final dressing. Pack bag if office day.' },
-      { start: readyEnd, end: bufferEnd, title: 'Buffer', desc: 'Commute or final settle-in. Glance the three things on the sticky.' },
-      { start: bufferEnd, end: wsStart, title: 'At the desk', desc: 'Laptop open. Three things in eyeline. Inboxes still closed.' },
+      { start: w, end: alarmEnd, title: 'Alarm', desc: 'Feet on the floor inside five minutes. Phone stays in the kitchen, not on the nightstand.', keystone: 'wake' },
+      { start: alarmEnd, end: launchEnd, title: 'Launch', desc: 'Bathroom, water, dress. Same order every day so the brain doesn\'t have to think yet. Coffee on if that\'s your thing.' },
+      { start: launchEnd, end: quietEnd, title: 'Quiet time', desc: 'Bible and prayer. House is still, wife is asleep, this hour is yours and God\'s. Read, pray, sit. No phone in this block — that\'s the whole point.' },
+      { start: quietEnd, end: breakfastEnd, title: 'Breakfast', desc: 'Real food with protein. Eat at the table, not at the laptop. News and email stay closed.' },
+      { start: breakfastEnd, end: readyEnd, title: 'Get ready', desc: 'Shower, teeth, dress for the day. If it\'s an office day, pack the bag now so you\'re not scrambling later.' },
+      { start: readyEnd, end: bufferEnd, title: 'Buffer', desc: 'Office day: head out. Remote day: walk around the block before you sit down — the transition matters. Either way, glance at your three things on the way.' },
+      { start: bufferEnd, end: wsStart, title: 'At the desk', desc: 'Laptop open. Three things in eyeline. Inboxes stay closed until the day actually starts.' },
     ];
 
-    // Workday: anchored to workStart and workEnd. We preserve the structure of
-    // 15min day-open, two deep blocks, lunch, production, comm, tail, shutdown.
-    // Default span is 8 hours; scale proportionally.
-    // Block durations at default 8h: 0.25 + 1.75 + 0.25 + 1.25 + 1 + 1 + 1.5 + 0.83 + 0.17 = 8h
-    // Shutdown is always the final 10 minutes (regardless of scale)
+    // Workday: anchored to workStart and workEnd. Structure preserved
+    // (open / deep / deep / lunch / production / comm / tail / shutdown) but
+    // copy is rewritten to match real work life, not productivity-bro language.
+    // Default span 8 hours; scales proportionally.
     const workSpan = wsEnd - wsStart;
     const workScale = workSpan / 8.0;
-    const shutdownStart = wsEnd - 10 / 60;        // 10 min before workEnd
-    const fridayReviewStart = wsEnd - 30 / 60;    // 30 min before workEnd
-    const tailEnd = shutdownStart;                 // Tail flows directly into shutdown
+    const shutdownStart = wsEnd - 10 / 60;
+    const fridayReviewStart = wsEnd - 30 / 60;
+    const tailEnd = shutdownStart;
     const workday = [
-      { start: wsStart, end: wsStart + 0.25 * workScale, title: 'Day open', desc: 'Three things in eyeline. Glance the 7-day deadline view. Open the file for Deep Block 1.' },
-      { start: wsStart + 0.25 * workScale, end: wsStart + 2.0 * workScale, title: 'Deep Block 1', desc: 'Dominant hat. One application full-screen. Notifications off. Phone in another room.' },
-      { start: wsStart + 2.0 * workScale, end: wsStart + 2.25 * workScale, title: 'Break', desc: 'Stand. Water. Away from screen. Phone scrolling is not a break.' },
-      { start: wsStart + 2.25 * workScale, end: wsStart + 3.5 * workScale, title: 'Deep Block 2', desc: 'Same hat. Maintain momentum.' },
-      { start: wsStart + 3.5 * workScale, end: wsStart + 4.5 * workScale, title: 'Lunch + walk', desc: 'Leave the desk. Real food. 15–20 min outside. No work Slack, no work email.' },
-      { start: wsStart + 4.5 * workScale, end: wsStart + 5.5 * workScale, title: 'Production block', desc: 'Batched shipping work. Social via OneUp. Get-it-out-the-door mode.' },
-      { start: wsStart + 5.5 * workScale, end: wsStart + 7.0 * workScale, title: 'Comm block', desc: 'Email and Slack to zero. Trello — hand-offs, nudges, blockers.' },
-      { start: wsStart + 7.0 * workScale, end: tailEnd, title: 'Tail / overflow', desc: 'Catch-up from morning overruns. Lingering small tasks.', notFriday: true },
-      { start: fridayReviewStart, end: wsEnd, title: 'Weekly Review', desc: 'Close the week + plan next week. Pick the one big thing, dominant hats per day, schedule workouts, decide Monday\'s three things.', keystone: 'shutdown', fridayOnly: true, isReview: true },
-      { start: shutdownStart, end: wsEnd, title: 'Shutdown', desc: 'Inboxes to zero. In-progress notes. Tomorrow\'s hat + three things on sticky. Close laptop.', keystone: 'shutdown', notFriday: true },
+      { start: wsStart, end: wsStart + 0.25 * workScale, title: 'Day open', desc: 'Three things at the top of the screen. Glance the calendar. Open the file or doc for the first real task before opening email.' },
+      { start: wsStart + 0.25 * workScale, end: wsStart + 2.0 * workScale, title: 'Focus block', desc: 'The hardest thing on the list. One app full-screen. Notifications muted. Phone face-down or in another room. This is when work actually gets done.' },
+      { start: wsStart + 2.0 * workScale, end: wsStart + 2.25 * workScale, title: 'Break', desc: 'Stand up. Water. Look out a window. Five minutes off-screen — phone scrolling doesn\'t count as a break.' },
+      { start: wsStart + 2.25 * workScale, end: wsStart + 3.5 * workScale, title: 'Focus block 2', desc: 'Same kind of work, keep the momentum. Don\'t check email between blocks.' },
+      { start: wsStart + 3.5 * workScale, end: wsStart + 4.5 * workScale, title: 'Lunch + walk', desc: 'Leave the desk. Eat real food away from the screen. Get outside for ten minutes if you can — light and movement matter more than the lunch itself.' },
+      { start: wsStart + 4.5 * workScale, end: wsStart + 5.5 * workScale, title: 'Production', desc: 'Smaller stuff. Tasks that just need to ship. Less brain-intensive than the morning blocks but still real work.' },
+      { start: wsStart + 5.5 * workScale, end: wsStart + 7.0 * workScale, title: 'Communication', desc: 'Email and Slack to inbox-zero. Reply to things that need replies. Schedule what needs scheduling. Resist the urge to check email all day; batch it here.' },
+      { start: wsStart + 7.0 * workScale, end: tailEnd, title: 'Catch-up', desc: 'Overflow from earlier. Loose ends. Whatever didn\'t fit cleanly into a block.', notFriday: true },
+      { start: fridayReviewStart, end: wsEnd, title: 'Weekly review', desc: 'Close the week. Pick the one big thing for next week. Decide Monday\'s three things. Anything urgent on the calendar?', keystone: 'shutdown', fridayOnly: true, isReview: true },
+      { start: shutdownStart, end: wsEnd, title: 'Shutdown', desc: 'Inboxes to zero. Note what you were in the middle of so future-you can pick it up. Tomorrow\'s three things on a sticky. Close the laptop.', keystone: 'shutdown', notFriday: true },
     ];
 
-    // Evening: anchored to home time. Default span: home → 4.5h later (10:30pm).
-    // We scale to (lightsOut - 0.5) - homeTime so it fits between arrival and shutdown trigger.
+    // Evening: 5 hours from home arrival to lights-out trigger.
+    // Evening is where this user's energy actually lives. Design priorities:
+    //   - protect time with wife when she's around (no rigid daily workout)
+    //   - allow personal energy time (hobbies, learning, decompression)
+    //   - hard phone cutoff at 9 PM so wind-down actually happens
+    //   - reset block (small evening tidy) still anchored, since it makes
+    //     tomorrow morning easier
+    // Block durations at default 5h (300 min):
+    // arrival 20, transition 25, dinner 60, free 90, phones-away 75, reset 30 = 300
     const eveningEnd = lo - 0.5;
     const eveningSpan = eveningEnd - h;
-    const eveningScale = eveningSpan / 4.5;
+    const eveningScale = eveningSpan / 5.0;
     const evening = [
-      { start: h, end: h + 0.25 * eveningScale, title: 'Arrival', desc: 'Bag in spot. Change directly into workout clothes. Do not sit. Do not open phone.' },
-      { start: h + 0.25 * eveningScale, end: h + 1.25 * eveningScale, title: 'Movement', desc: 'Workout (Mon/Tue/Thu/Fri) or 30-min walk (Wed/weekends).' },
-      { start: h + 1.25 * eveningScale, end: h + 1.75 * eveningScale, title: 'Shower + dinner prep', desc: 'Shower first. Reheat or cook.' },
-      { start: h + 1.75 * eveningScale, end: h + 2.5 * eveningScale, title: 'Dinner with wife', desc: 'Phones face-down or in another room. TV off. At the table.' },
-      { start: h + 2.5 * eveningScale, end: h + 3.0 * eveningScale, title: 'Reset block', desc: 'Dishes. Counters. 15-min sweep. Tomorrow\'s clothes laid out. Bag packed.', keystone: 'reset' },
-      { start: h + 3.0 * eveningScale, end: eveningEnd, title: 'Free time', desc: 'Show, book, time with wife. Bounded — ends at the shutdown trigger, not "whenever."' },
+      { start: h, end: h + 0.333 * eveningScale, title: 'Arrival', desc: 'Bag in its spot. Change out of work clothes. Don\'t sit down with your phone — that\'s a trap. Greet your wife if she\'s home.' },
+      { start: h + 0.333 * eveningScale, end: h + 0.75 * eveningScale, title: 'Transition', desc: 'A walk, a stretch, music, whatever marks the line between work-brain and home-brain. Especially important on remote days when there\'s no commute to do this job.' },
+      { start: h + 0.75 * eveningScale, end: h + 1.75 * eveningScale, title: 'Dinner', desc: 'Cook or reheat. Eat at the table. If you\'re eating together, phones face-down and the TV stays off — even one night a week of this matters.' },
+      { start: h + 1.75 * eveningScale, end: h + 3.25 * eveningScale, title: 'Personal energy', desc: 'This is when you actually have energy. Use it. A hobby, learning something, a project, reading, time with your wife — whatever\'s real for tonight. Not "scroll until tired."' },
+      { start: h + 3.25 * eveningScale, end: h + 4.5 * eveningScale, title: 'Phones away', desc: 'Phone goes to the kitchen counter. Last 75 minutes of the day are screen-free or close to it — a book, a real conversation, music, anything that\'s not a feed.' },
+      { start: h + 4.5 * eveningScale, end: eveningEnd, title: 'Evening reset', desc: 'Dishes done. Counters wiped. Tomorrow\'s clothes out. Bag packed if it\'s an office day. Five minutes of work that makes tomorrow easier.', keystone: 'reset' },
     ];
 
-    // Night: 30 min before lights out
+    // Night: 30-minute wind-down before lights out. Non-negotiable if you
+    // want 10:30 to actually happen — without it, the slide to 11:30 is real.
     const night = [
-      { start: lo - 0.5, end: lo - 0.25, title: 'Shutdown trigger', desc: 'Phone to kitchen charger. Lights dimmed. Bathroom routine. Water on nightstand.' },
-      { start: lo - 0.25, end: lo, title: 'In bed', desc: 'Book or nothing. No phone, no TV.' },
-      { start: lo, end: lo + 0.001, title: 'Lights out', desc: 'Lamps off. Eyes closed. The day is done.', keystone: 'lights' },
+      { start: lo - 0.5, end: lo - 0.25, title: 'Wind-down', desc: 'Phone to the kitchen if it isn\'t already. Lights dimmed. Teeth, water on the nightstand, bathroom. The day is ending.' },
+      { start: lo - 0.25, end: lo, title: 'In bed', desc: 'Book or quiet. Lying in bed scrolling is the bedtime killer. Even ten pages of a real book is enough.' },
+      { start: lo, end: lo + 0.001, title: 'Lights out', desc: 'Lamps off. Eyes closed. The day is done — whatever didn\'t happen waits for tomorrow.', keystone: 'lights' },
     ];
 
     // Add formatted time strings
@@ -3464,13 +3474,14 @@
 
   function buildSundayReset() {
     const s = settings.sundayStart;
-    // Sunday Reset is 60 min: 5 sub-blocks of 15/15/10/10/10
+    // 60 min Sunday Reset, five sub-blocks of 15/15/10/10/10
+    // The week ahead becomes manageable when these five things have happened.
     const blocks = [
-      { start: s, end: s + 0.25, title: 'Groceries + meal plan', desc: 'Pick 5 dinners for the workweek. Make grocery list. Order delivery or plan to shop. Lunches if you pack them.', phase: 'sunday' },
-      { start: s + 0.25, end: s + 0.5, title: 'Laundry + apartment sweep', desc: 'Start a load. Bathroom wipe-down. Floors. Anything that\'s accumulated during the week.', phase: 'sunday' },
-      { start: s + 0.5, end: s + 0.667, title: 'Calendar + admin', desc: 'Look at next week. Confirm meetings. Errand list. Mail/packages check.', phase: 'sunday' },
-      { start: s + 0.667, end: s + 0.833, title: 'Money glance', desc: 'Open Chime. 3 numbers: spending, bills, savings. Anything weird in transactions? Bills due in 7 days not on autopay → pay now. Envelope check.', phase: 'sunday' },
-      { start: s + 0.833, end: s + 1.0, title: 'Week prep + gear', desc: 'Monday\'s clothes laid out. Workout clothes. Water bottle, gym bag, lunch container ready. Coffee setup staged. Switch laundry.', phase: 'sunday', keystone: 'reset' },
+      { start: s, end: s + 0.25, title: 'Meals + groceries', desc: 'Pick five dinners for the workweek. With your wife if she\'s up — easier than guessing what she\'ll be in the mood for. Make the list, plan the shop or delivery.', phase: 'sunday' },
+      { start: s + 0.25, end: s + 0.5, title: 'Apartment sweep', desc: 'Laundry started. Bathroom wipe-down. Floors if they need it. Whatever\'s been accumulating that\'ll bother you on Tuesday.', phase: 'sunday' },
+      { start: s + 0.5, end: s + 0.667, title: 'Week ahead', desc: 'Look at the calendar. Which days are office, which are remote? Any appointments to remember? Errands that need to fit in?', phase: 'sunday' },
+      { start: s + 0.667, end: s + 0.833, title: 'Money glance', desc: 'Open the Budget tab. Glance the headline number. Anything due in the next seven days that needs cash moved? Update balances if it\'s been a week.', phase: 'sunday' },
+      { start: s + 0.833, end: s + 1.0, title: 'Tomorrow ready', desc: 'Monday\'s clothes out. Bag packed. Lunch staged if it\'s an office day. Switch laundry. Future-you will be grateful at 6:30 AM.', phase: 'sunday', keystone: 'reset' },
     ];
     blocks.forEach(b => { b.time = formatBlockTime(b.start, b.end); });
     return blocks;
@@ -3479,9 +3490,9 @@
   function buildMonthlyReview() {
     const s = settings.sundayStart + 1.0; // immediately after the regular reset
     const blocks = [
-      { start: s, end: s + 0.167, title: 'Monthly · Look back', desc: 'Last month\'s total spending. Anything surprising? Any forgotten subscriptions to cancel right now?', phase: 'sunday' },
-      { start: s + 0.167, end: s + 0.333, title: 'Monthly · Look forward', desc: 'Anything big next month? Travel, gifts, annual renewals, taxes? Will the bills account cover it? Transfer in if not.', phase: 'sunday' },
-      { start: s + 0.333, end: s + 0.5, title: 'Monthly · Cards + savings check-in', desc: 'Card payoff progress. Did savings grow? Living within means? If not — pick ONE thing to cut next month. One change max.', phase: 'sunday' },
+      { start: s, end: s + 0.167, title: 'Look back', desc: 'Last month\'s spending — anything surprising? Any subscription you forgot you were paying for? Cancel it right now while you\'re here.', phase: 'sunday' },
+      { start: s + 0.167, end: s + 0.333, title: 'Look forward', desc: 'Anything big coming up next month? Travel, birthdays, annual renewals, car registration? Will the budget cover it, or does cash need to start moving now?', phase: 'sunday' },
+      { start: s + 0.333, end: s + 0.5, title: 'Honest check', desc: 'Are the savings goals growing? Are bills getting paid on time? If something\'s drifting, pick one thing to change. Just one — small consistent moves beat big resets every time.', phase: 'sunday' },
     ];
     blocks.forEach(b => { b.time = formatBlockTime(b.start, b.end); });
     return blocks;
